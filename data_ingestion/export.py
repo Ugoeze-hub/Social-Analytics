@@ -29,8 +29,8 @@ def export_collection_to_csv(collection_name, filename, fields=None):
     print(f"Exported {len(data)} records from {collection_name} to {filename}")
     return len(data)
 
-videos_count = export_collection_to_csv('youtube_videos', 'youtube_videos_export.csv')
-comments_count = export_collection_to_csv('youtube_comments', 'youtube_comments_export.csv')
+videos_count = export_collection_to_csv('youtube_videos', 'exports/youtube_videos_export.csv')
+comments_count = export_collection_to_csv('youtube_comments', 'exports/youtube_comments_export.csv')
 
 print(f"\nTotal: {videos_count} videos, {comments_count} comments exported")
 client.close()
