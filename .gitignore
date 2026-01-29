@@ -1,4 +1,13 @@
+# Python
+.venv/
 .env
-*csv
-venv
-__pycache__/
+
+# Outputs
+*.json
+*.jsonl
+*.csv
+data/
+exports/
+
+
+.DS_Store
