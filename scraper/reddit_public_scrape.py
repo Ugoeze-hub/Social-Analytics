@@ -12,7 +12,7 @@ import requests
 load_dotenv()
 
 # -----------------------------
-# Helpers: extract hashtags/mentions (optional)
+# Helpers: extract hashtags/mentions from posts
 # -----------------------------
 HASHTAG_RE = re.compile(r"(?:^|[^0-9A-Z_])#([A-Z0-9_]+)", re.IGNORECASE)
 MENTION_RE = re.compile(r"(?:^|[^0-9A-Z_])@([A-Z0-9_]+)", re.IGNORECASE)
@@ -26,11 +26,11 @@ def extract_mentions(text: str) -> List[str]:
 def iso_utc(ts_utc: float) -> str:
     return datetime.fromtimestamp(ts_utc, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
-# -----------------------------
-# Transform Reddit JSON -> your schema
-# -----------------------------
+# --------------------------------------------
+# Transform Reddit JSON into ingestion schema
+# --------------------------------------------
 def to_schema(post: Dict[str, Any]) -> Dict[str, Any]:
-    post_id = post.get("name") or post.get("id")  # usually "t3_xxxxx"
+    post_id = post.get("name") or post.get("id")
     title = post.get("title") or ""
     body = post.get("selftext") or ""
     text = (title + "\n\n" + body).strip() if body else title.strip()
