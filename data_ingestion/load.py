@@ -4,6 +4,10 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 from datetime import datetime
 import time
+import openpyxl
+from openpyxl import Workbook
+
+import re
 
 load_dotenv()
 youtube_api_key = os.getenv("YOUTUBE_API_KEY")
@@ -11,7 +15,6 @@ mongo_uri = os.getenv("DATABASE_URL")
 
 if not youtube_api_key:
     print("ERROR: YOUTUBE_API_KEY not found in .env file!")
-    print("Make sure you have a .env file with YOUTUBE_API_KEY=your_key_here")
     exit(1)
 
 youtube = build('youtube', 'v3', developerKey=youtube_api_key)
@@ -24,117 +27,137 @@ comments_collection = db.youtube_comments
 print("Starting YouTube data load")
 
 search_queries = [
-    "Data",
-    "AI",
+    "Data Science",
+    "Artificial Intelligence",
     "Statistics"
 ]
 
+wb = Workbook()
+ws = wb.active
+ws.title = "Social Media Data"
+
+headers = [
+    'post_id', 'platform', 'text', 'hashtags','created_at',
+    'likes', 'comments','permalink', 'url', 'topic_tag', 'engagement'
+]
+
+ws.append(headers)
+
+for cell in ws[1]:
+    cell.font = openpyxl.styles.Font(bold=True)
+
 total_videos = 0
-total_comments = 0
+VIDEOS_PER_QUERY = 200
+
+def extract_hashtags(text):
+    """Extract hashtags from text"""
+    return ','.join(re.findall(r'#\w+', text))
 
 for query in search_queries:
     print(f"\nSearching for: {query}")
     
     try:
-        search_request = youtube.search().list(
-            part="snippet",
-            q=query,
-            type="video",
-            maxResults=50,
-            relevanceLanguage="en",
-            order="date",  
-        )
-        search_response = search_request.execute()
+        all_video_ids = []
+        next_page_token = None
+        videos_collected = 0
         
-        if not search_response.get('items'):
-            print(f"No results found for '{query}'")
-            continue
-        
-        video_ids = [item['id']['videoId'] for item in search_response['items']]
-        print(f"Found {len(video_ids)} videos")
-        
-        videos_request = youtube.videos().list(
-            part="snippet,statistics,contentDetails",
-            id=','.join(video_ids)
-        )
-        videos_response = videos_request.execute()
-        
-        for video in videos_response['items']:
-            video_doc = {
-                "platform": "YouTube",
-                "video_id": video['id'],
-                "title": video['snippet']['title'],
-                "description": video['snippet']['description'],
-                "channel": video['snippet']['channelTitle'],
-                "channel_id": video['snippet']['channelId'],
-                "published_at": video['snippet']['publishedAt'],
-                "views": int(video['statistics'].get('viewCount', 0)),
-                "likes": int(video['statistics'].get('likeCount', 0)),
-                "comments_count": int(video['statistics'].get('commentCount', 0)),
-                "tags": video['snippet'].get('tags', []),
-                "category_id": video['snippet']['categoryId'],
-                "duration": video['contentDetails']['duration'],
-                "thumbnail": video['snippet']['thumbnails']['high']['url'],
-                "search_query": query,
-                "ingested_at": datetime.utcnow()
-            }
-            
-            videos_collection.update_one(
-                {"video_id": video['id']},
-                {"$set": video_doc},
-                upsert=True
+        while videos_collected < VIDEOS_PER_QUERY:
+            search_request = youtube.search().list(
+                part="snippet",
+                q=query,
+                type="video",
+                maxResults=50,
+                pageToken=next_page_token,
+                relevanceLanguage="en",
+                order="date",
             )
-            total_videos += 1
-        
-        print(f"Saved {len(videos_response['items'])} videos to MongoDB")
-        
-        videos_with_comments = [v for v in videos_response['items'] 
-                               if int(v['statistics'].get('commentCount', 0)) > 0]
-        
-        for video in videos_with_comments[:5]:
-            video_id = video['id']
+            search_response = search_request.execute()
             
-            try:
-                comments_request = youtube.commentThreads().list(
-                    part="snippet",
-                    videoId=video_id,
-                    maxResults=50,  
-                    order="relevance" 
+            if not search_response.get('items'):
+                break
+            
+            page_video_ids = [item['id']['videoId'] for item in search_response['items']]
+            all_video_ids.extend(page_video_ids)
+            videos_collected += len(page_video_ids)
+            
+            print(f"  Collected {videos_collected} videos...")
+            
+            next_page_token = search_response.get('nextPageToken')
+            if not next_page_token:
+                break
+            
+            time.sleep(0.5)
+        
+        print(f"Found {len(all_video_ids)} videos for '{query}'")
+        
+        for i in range(0, len(all_video_ids), 50):
+            batch_ids = all_video_ids[i:i+50]
+            
+            videos_request = youtube.videos().list(
+                part="snippet,statistics,contentDetails",
+                id=','.join(batch_ids)
+            )
+            videos_response = videos_request.execute()
+            
+            for video in videos_response['items']:
+                video_id = video['id']
+                title = video['snippet']['title']
+                description = video['snippet']['description']
+                full_text = f"{title}. {description}"
+                
+                hashtags = extract_hashtags(full_text)
+                if not hashtags and video['snippet'].get('tags'):
+                    hashtags = ','.join(['#' + tag for tag in video['snippet']['tags'][:5]])
+                
+                created_at = video['snippet']['publishedAt']
+                likes = int(video['statistics'].get('likeCount', 0))
+                comments = int(video['statistics'].get('commentCount', 0))  
+                views = int(video['statistics'].get('viewCount', 0))
+                
+                engagement = round(((likes + comments) / views * 100), 2) if views > 0 else 0
+                
+                url = f"https://www.youtube.com/watch?v={video_id}"
+                
+                ws.append([
+                    video_id,                    
+                    'YouTube',                   
+                    full_text[:500],            
+                    hashtags,                    
+                    created_at,                 
+                    likes,                      
+                    comments,                        
+                    url,                       
+                    url,                       
+                    query,                     
+                    engagement                 
+                ])
+                
+                video_doc = {
+                    "platform": "YouTube",
+                    "video_id": video_id,
+                    "title": title,
+                    "description": description,
+                    "channel": video['snippet']['channelTitle'],
+                    "published_at": created_at,
+                    "views": views,
+                    "likes": likes,
+                    "comments_count": comments,
+                    "tags": video['snippet'].get('tags', []),
+                    "url": url,
+                    "topic_tag": query,
+                    "engagement": engagement,
+                    "ingested_at": datetime.utcnow()
+                }
+                
+                videos_collection.update_one(
+                    {"video_id": video_id},
+                    {"$set": video_doc},
+                    upsert=True
                 )
-                comments_response = comments_request.execute()
                 
-                video_comments = 0
-                for item in comments_response['items']:
-                    comment = item['snippet']['topLevelComment']['snippet']
-                    comment_doc = {
-                        "platform": "YouTube",
-                        "video_id": video_id,
-                        "video_title": video['snippet']['title'],
-                        "comment_id": item['id'],
-                        "text": comment['textDisplay'],
-                        "author": comment['authorDisplayName'],
-                        "likes": comment['likeCount'],
-                        "published_at": comment['publishedAt'],
-                        "search_query": query,
-                        "ingested_at": datetime.utcnow()
-                    }
-                    
-                    # Update if exists, insert if new
-                    comments_collection.update_one(
-                        {"comment_id": item['id']},
-                        {"$set": comment_doc},
-                        upsert=True
-                    )
-                    video_comments += 1
-                    total_comments += 1
-                
-                print(f" Saved {video_comments} comments from '{video['snippet']['title'][:50]}...'")
-                
-            except Exception as e:
-                if "commentsDisabled" in str(e):
-                    print(f"Comments disabled for video")
-                else:
-                    print(f" Error fetching comments: {str(e)}")
+                total_videos += 1
+            
+            print(f"Saved batch {i//50 + 1}")
         
         time.sleep(1)
         
@@ -142,14 +165,25 @@ for query in search_queries:
         print(f" Error with query '{query}': {str(e)}")
         continue
 
-print(f"\nLoad complete!")
-print(f"Total videos ingested: {total_videos}")
-print(f"Total comments ingested: {total_comments}")
-print(f"Database: {db.name}")
-print(f"Collections: {videos_collection.name}, {comments_collection.name}")
+for column in ws.columns:
+    max_length = 0
+    column_letter = column[0].column_letter
+    for cell in column:
+        try:
+            if len(str(cell.value)) > max_length:
+                max_length = len(str(cell.value))
+        except:
+            pass
+    adjusted_width = min(max_length + 2, 50) 
+    ws.column_dimensions[column_letter].width = adjusted_width
 
-print("\n Quick Stats:")
-print(f"  Videos in DB: {videos_collection.count_documents({})}")
-print(f"  Comments in DB: {comments_collection.count_documents({})}")
+excel_filename = "exports/social_media_data.xlsx"
+wb.save(excel_filename)
+
+print(f"\nLoad complete!")
+print(f"Total videos collected: {total_videos}")
+print(f"Data saved to: {excel_filename}")
+print(f"\nMongoDB Stats:")
+print(f" Videos in DB: {videos_collection.count_documents({})}")
 
 mongo_client.close()

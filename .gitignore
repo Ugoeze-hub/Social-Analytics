@@ -6,6 +6,7 @@
 *.json
 *.jsonl
 *.csv
+*.xlsx
 data/
 exports/
 
